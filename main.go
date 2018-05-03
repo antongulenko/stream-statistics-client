@@ -25,6 +25,8 @@ func do_main() int {
 	receiveBufferSize := flag.Uint("receiveBuffer", 1024*1024, "Number of bytes to read from each stream at a time")
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	doHttp := flag.Bool("http", false, "Start http streams instead of multimedia streams")
+	readFiles := flag.Bool("files", false, "Treat the positional parameters as file names that are read after each stream ends, containing one stream target per line.")
+	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 
 	cmd := cmd_helper.CmdDataCollector{DefaultOutput: "csv://-"}
 	cmd.ParseFlags()
@@ -34,7 +36,10 @@ func do_main() int {
 	defer golib.ProfileCpu()()
 
 	var factory StreamFactory
-	streamFactory := URLStreamFactory{URLs: flag.Args()}
+	streamFactory := URLStreamFactory{
+		URLs:      flag.Args(),
+		ReadFiles: *readFiles,
+	}
 
 	if *doHttp {
 		factory = &HttpStreamFactory{
@@ -45,6 +50,7 @@ func do_main() int {
 		factory = &MultimediaStreamFactory{
 			URLStreamFactory:      streamFactory,
 			ExpectedInitialErrors: 10,
+			TimeoutDuration:       *timeout,
 		}
 	}
 
