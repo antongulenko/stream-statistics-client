@@ -15,6 +15,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const noUrlsSleepDuration = 5 * time.Second
+
 func main() {
 	os.Exit(do_main())
 }
@@ -156,7 +158,11 @@ func (c *StreamStatisticsCollector) handleStreamLoop(wg *sync.WaitGroup) {
 
 func (c *StreamStatisticsCollector) handleStream() {
 	stream, err := c.Factory.OpenStream()
-	if err != nil {
+	if err == ErrorNoURLs {
+		log.Println("No URLs available for streaming, sleeping for %v...")
+		time.Sleep(noUrlsSleepDuration)
+		return
+	} else if err != nil {
 		log.Errorln("Error opening stream:", err)
 		c.increment(c.errors, 1)
 		return

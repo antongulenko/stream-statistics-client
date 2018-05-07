@@ -16,6 +16,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+var (
+	ErrorNoURLs = errors.New("No URLs available for streaming...")
+
+	// This is a workaround for a shortcoming of the joy4 library, where the end of a stream is
+	// not detected cleanly
+	ErrorExpectedTimeout = errors.New("Connection timed out")
+)
+
 func init() {
 	format.RegisterAll()
 }
@@ -43,7 +51,7 @@ func (f *URLStreamFactory) NextURL() (string, error) {
 	}
 	res := f.nextURL(urls)
 	if res == "" {
-		return "", errors.New("No URLs available for streaming...")
+		return "", ErrorNoURLs
 	}
 	return res, nil
 }
@@ -147,6 +155,9 @@ type MultimediaStream struct {
 
 func (f *MultimediaStream) Receive() (int, error) {
 	pkt, err := f.readPacket()
+	if err == ErrorExpectedTimeout {
+		return 0, io.EOF
+	}
 	return len(pkt.Data), err
 }
 
@@ -178,7 +189,9 @@ func (f *MultimediaStream) readPacket() (av.Packet, error) {
 	pkt, err := f.Conn.ReadPacket()
 	received = true
 	if timedOut && err != nil {
-		err = fmt.Errorf("RTMP connection timed out: %v (Error: %v)", f.Conn.NetConn().RemoteAddr(), err)
+		// TODO find a better RTMP library and remove this workaround
+		err = ErrorExpectedTimeout
+		// err = fmt.Errorf("RTMP connection timed out: %v (Error: %v)", f.Conn.NetConn().RemoteAddr(), err)
 	}
 	return pkt, err
 }
