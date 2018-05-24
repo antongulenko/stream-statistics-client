@@ -4,12 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	bitflow "github.com/antongulenko/go-bitflow"
-	collector "github.com/antongulenko/go-bitflow-collector"
 	"github.com/antongulenko/go-bitflow-collector/cmd_helper"
 	"github.com/antongulenko/golib"
 	log "github.com/sirupsen/logrus"
@@ -22,12 +23,9 @@ func main() {
 }
 
 func do_main() int {
-	parallelStreams := flag.Int("n", 1, "Number of parallel streams to start and measure")
+	parallelStreams := flag.Int("n", 1, "Number of parallel streams to start immediately")
 	restartDelay := flag.Duration("restartDelay", 500*time.Millisecond, "Time before starting a new stream, when a stream ends (with or without error)")
-	receiveBufferSize := flag.Uint("receiveBuffer", 1024*1024, "Number of bytes to read from each stream at a time")
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
-	doHttp := flag.Bool("http", false, "Start http streams instead of multimedia streams")
-	readFiles := flag.Bool("files", false, "Treat the positional parameters as file names that are read after each stream ends, containing one stream target per line.")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 
 	cmd := cmd_helper.CmdDataCollector{DefaultOutput: "csv://-"}
@@ -37,36 +35,19 @@ func do_main() int {
 	}
 	defer golib.ProfileCpu()()
 
-	var factory StreamFactory
-	streamFactory := URLStreamFactory{
-		URLs:      flag.Args(),
-		ReadFiles: *readFiles,
+	factory := &RtmpStreamFactory{
+		URLs:            flag.Args(),
+		TimeoutDuration: *timeout,
 	}
-
-	if *doHttp {
-		factory = &HttpStreamFactory{
-			URLStreamFactory: streamFactory,
-			ReceiveBuffer:    make([]byte, int(*receiveBufferSize)),
-		}
-	} else {
-		factory = &MultimediaStreamFactory{
-			URLStreamFactory:      streamFactory,
-			ExpectedInitialErrors: 10,
-			TimeoutDuration:       *timeout,
-		}
-	}
-
-	pipe := cmd.MakePipeline()
-	pipe.Source = &StreamStatisticsCollector{
+	stats := &StreamStatisticsCollector{
+		InitialStreams:     *parallelStreams,
 		Factory:            factory,
-		ParallelStreams:    *parallelStreams,
 		RestartDelay:       *restartDelay,
 		SampleSinkInterval: *sinkInterval,
-		ValueRingFactory: collector.ValueRingFactory{
-			Length:   1000,
-			Interval: time.Second,
-		},
 	}
+	cmd.RestApis = append(cmd.RestApis, &SetUrlsRestApi{Col: stats})
+	pipe := cmd.MakePipeline()
+	pipe.Source = stats
 	for _, str := range pipe.FormatLines() {
 		log.Println(str)
 	}
@@ -76,63 +57,142 @@ func do_main() int {
 type StreamStatisticsCollector struct {
 	bitflow.AbstractMetricSource
 
-	collector.ValueRingFactory
-	Factory            StreamFactory
-	ParallelStreams    int
+	InitialStreams     int
+	Factory            *RtmpStreamFactory
 	RestartDelay       time.Duration
 	SampleSinkInterval time.Duration
+	RestApiEndpoint    string
 
-	stopper golib.StopChan
+	wg             *sync.WaitGroup
+	runningStreams []*RunningStream
+	streamsLock    sync.Mutex
+	stopper        golib.StopChan
 
 	// Stream statistics
-	lock   sync.Mutex
-	opened *collector.ValueRing
-	closed *collector.ValueRing
-	errors *collector.ValueRing
-	bytes  *collector.ValueRing
+	statisticsTime       time.Time
+	openConnections      TwoWayCounter
+	receivingConnections TwoWayCounter
+	opened               IncrementedCounter
+	closed               IncrementedCounter
+	errors               IncrementedCounter
+	bytes                IncrementedCounter
+	packets              IncrementedCounter
+}
+
+type TwoWayCounter struct {
+	value int64
+}
+
+func (c *TwoWayCounter) Get() bitflow.Value {
+	return bitflow.Value(atomic.LoadInt64(&c.value))
+}
+
+func (c *TwoWayCounter) Increment(val int64) {
+	atomic.AddInt64(&c.value, val)
+}
+
+type IncrementedCounter struct {
+	current  uint64
+	previous uint64
+}
+
+func (c *IncrementedCounter) Get() bitflow.Value {
+	return bitflow.Value(atomic.LoadUint64(&c.current))
+}
+
+func (c *IncrementedCounter) Increment(val uint64) {
+	atomic.AddUint64(&c.current, val)
+}
+
+func (c *IncrementedCounter) ComputeDiff(timeDiff time.Duration) (bitflow.Value, bitflow.Value) {
+	current := atomic.LoadUint64(&c.current)
+	previous := c.previous
+	c.previous = current
+	diff := current - previous
+	if current < previous {
+		// Value overflow
+		diff = math.MaxUint64 - previous + current
+	}
+	diffPerSecond := float64(diff) / timeDiff.Seconds()
+	return bitflow.Value(current), bitflow.Value(diffPerSecond)
 }
 
 func (c *StreamStatisticsCollector) String() string {
-	return fmt.Sprintf("Measure %v stream(s) from %T", c.ParallelStreams, c.Factory)
+	return fmt.Sprintf("Measure %v stream(s) from %T", len(c.runningStreams), c.Factory)
 }
 
 func (c *StreamStatisticsCollector) Start(wg *sync.WaitGroup) golib.StopChan {
+	c.wg = wg
 	c.stopper = golib.NewStopChan()
-	c.opened = c.NewValueRing()
-	c.closed = c.NewValueRing()
-	c.errors = c.NewValueRing()
-	c.bytes = c.NewValueRing()
-	for i := 0; i < c.ParallelStreams; i++ {
-		wg.Add(1)
-		go c.handleStreamLoop(wg)
-	}
 	wg.Add(1)
 	go c.sinkSamples(wg)
+	c.SetNumberOfStreams(c.InitialStreams)
 	return c.stopper
+}
+
+func (c *StreamStatisticsCollector) SetNumberOfStreams(num int) {
+	c.streamsLock.Lock()
+	defer c.streamsLock.Unlock()
+	if num < 0 {
+		num = 0
+	}
+	if len(c.runningStreams) > num {
+		// Close excess the streams
+		toClose := c.runningStreams[num:]
+		c.runningStreams = c.runningStreams[:num]
+		log.Printf("Closing %v stream(s), new number of streams: %v", len(toClose), len(c.runningStreams))
+		for _, stream := range toClose {
+			stream.stop()
+		}
+	} else if len(c.runningStreams) < num {
+		// Spawn missing streams if not stopped yet
+		if c.stopper.Stopped() {
+			return
+		}
+		missing := num - len(c.runningStreams)
+		log.Printf("Starting %v new stream(s), new number of streams: %v", missing, len(c.runningStreams)+missing)
+		for i := 0; i < missing; i++ {
+			newStream := &RunningStream{col: c, stopper: golib.NewStopChan()}
+			c.runningStreams = append(c.runningStreams, newStream)
+			newStream.start()
+		}
+	}
 }
 
 func (c *StreamStatisticsCollector) Stop() {
 	c.stopper.Stop()
+	c.SetNumberOfStreams(0)
 }
 
 func (c *StreamStatisticsCollector) sinkSamples(wg *sync.WaitGroup) {
 	defer wg.Done()
+	defer c.CloseSink(wg)
+	c.statisticsTime = time.Now()
 	for c.stopper.WaitTimeout(c.SampleSinkInterval) {
+		now := time.Now()
+		previousTime := c.statisticsTime
+		c.statisticsTime = now
+		timeDiff := now.Sub(previousTime)
+		opened, openedDiff := c.opened.ComputeDiff(timeDiff)
+		closed, closedDiff := c.closed.ComputeDiff(timeDiff)
+		errors, errorsDiff := c.errors.ComputeDiff(timeDiff)
+		bytes, bytesDiff := c.bytes.ComputeDiff(timeDiff)
+		packets, packetsDiff := c.packets.ComputeDiff(timeDiff)
 		values := []bitflow.Value{
+			// Meta values
+			bitflow.Value(len(c.runningStreams)),
+			c.openConnections.Get(),
+			c.receivingConnections.Get(),
 			// Absolute values
-			c.opened.GetHeadValue(),
-			c.closed.GetHeadValue(),
-			c.errors.GetHeadValue(),
-			c.bytes.GetHeadValue(),
+			opened, closed, errors, bytes, packets,
 			// Values per second
-			c.opened.GetDiff(),
-			c.closed.GetDiff(),
-			c.errors.GetDiff(),
-			c.bytes.GetDiff(),
+			openedDiff, closedDiff, errorsDiff, bytesDiff, packetsDiff,
+			// TODO avg delay between packets
 		}
 		fields := []string{
-			"opened", "closed", "errors", "bytes",
-			"opened/s", "closed/s", "errors/s", "bytes/s",
+			"streams", "openConnections", "receivingConnections",
+			"opened", "closed", "errors", "bytes", "packets",
+			"opened/s", "closed/s", "errors/s", "bytes/s", "packets/s",
 		}
 		err := c.OutgoingSink.Sample(
 			&bitflow.Sample{
@@ -148,45 +208,67 @@ func (c *StreamStatisticsCollector) sinkSamples(wg *sync.WaitGroup) {
 	}
 }
 
-func (c *StreamStatisticsCollector) handleStreamLoop(wg *sync.WaitGroup) {
-	defer wg.Done()
-	for !c.stopper.Stopped() {
-		c.handleStream()
-		c.stopper.WaitTimeout(c.RestartDelay)
-	}
+type RunningStream struct {
+	col     *StreamStatisticsCollector
+	stopper golib.StopChan
+	wg      sync.WaitGroup
+	stream  *RtmpStream
 }
 
-func (c *StreamStatisticsCollector) handleStream() {
-	stream, err := c.Factory.OpenStream()
+func (c *RunningStream) start() {
+	c.col.wg.Add(1)
+	c.wg.Add(1)
+	go func() {
+		defer c.col.wg.Done()
+		defer c.wg.Done()
+		for !c.stopper.Stopped() {
+			c.handleStream()
+			c.stopper.WaitTimeout(c.col.RestartDelay)
+		}
+	}()
+}
+
+func (c *RunningStream) stop() {
+	c.stopper.Stop()
+	c.stream.Close()
+	c.wg.Wait()
+}
+
+func (c *RunningStream) handleStream() {
+	stream, err := c.col.Factory.OpenStream()
+	c.stream = stream
 	if err == ErrorNoURLs {
 		log.Println("No URLs available for streaming, sleeping for %v...")
-		time.Sleep(noUrlsSleepDuration)
+		c.stopper.WaitTimeout(noUrlsSleepDuration)
 		return
 	} else if err != nil {
 		log.Errorln("Error opening stream:", err)
-		c.increment(c.errors, 1)
+		c.col.errors.Increment(1)
 		return
 	}
-	c.increment(c.opened, 1)
+	c.col.opened.Increment(1)
+	c.col.openConnections.Increment(1)
+	defer c.col.openConnections.Increment(-1)
+	received := false
 	for !c.stopper.Stopped() {
 		num, err := stream.Receive()
 		if num > 0 {
-			c.increment(c.bytes, num)
+			c.col.bytes.Increment(uint64(num))
+			c.col.packets.Increment(1)
+			if !received {
+				received = true
+				c.col.receivingConnections.Increment(1)
+				defer c.col.receivingConnections.Increment(-1)
+			}
 		}
 		if err == io.EOF {
-			c.increment(c.closed, 1)
+			c.col.closed.Increment(1)
 			return
 		} else if err != nil {
 			log.Errorln("Error reading from stream:", err)
-			c.increment(c.errors, 1)
-			c.increment(c.closed, 1)
+			c.col.errors.Increment(1)
+			c.col.closed.Increment(1)
 			return
 		}
 	}
-}
-
-func (c *StreamStatisticsCollector) increment(ring *collector.ValueRing, val int) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	ring.IncrementValue(bitflow.Value(val))
 }
