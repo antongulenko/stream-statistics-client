@@ -4,10 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	bitflow "github.com/antongulenko/go-bitflow"
@@ -77,44 +75,7 @@ type StreamStatisticsCollector struct {
 	errors               IncrementedCounter
 	bytes                IncrementedCounter
 	packets              IncrementedCounter
-}
-
-type TwoWayCounter struct {
-	value int64
-}
-
-func (c *TwoWayCounter) Get() bitflow.Value {
-	return bitflow.Value(atomic.LoadInt64(&c.value))
-}
-
-func (c *TwoWayCounter) Increment(val int64) {
-	atomic.AddInt64(&c.value, val)
-}
-
-type IncrementedCounter struct {
-	current  uint64
-	previous uint64
-}
-
-func (c *IncrementedCounter) Get() bitflow.Value {
-	return bitflow.Value(atomic.LoadUint64(&c.current))
-}
-
-func (c *IncrementedCounter) Increment(val uint64) {
-	atomic.AddUint64(&c.current, val)
-}
-
-func (c *IncrementedCounter) ComputeDiff(timeDiff time.Duration) (bitflow.Value, bitflow.Value) {
-	current := atomic.LoadUint64(&c.current)
-	previous := c.previous
-	c.previous = current
-	diff := current - previous
-	if current < previous {
-		// Value overflow
-		diff = math.MaxUint64 - previous + current
-	}
-	diffPerSecond := float64(diff) / timeDiff.Seconds()
-	return bitflow.Value(current), bitflow.Value(diffPerSecond)
+	packetDelay          AveragingCounter
 }
 
 func (c *StreamStatisticsCollector) String() string {
@@ -178,6 +139,7 @@ func (c *StreamStatisticsCollector) sinkSamples(wg *sync.WaitGroup) {
 		errors, errorsDiff := c.errors.ComputeDiff(timeDiff)
 		bytes, bytesDiff := c.bytes.ComputeDiff(timeDiff)
 		packets, packetsDiff := c.packets.ComputeDiff(timeDiff)
+		packetDelay := c.packetDelay.ComputeAvg()
 		values := []bitflow.Value{
 			// Meta values
 			bitflow.Value(len(c.runningStreams)),
@@ -187,12 +149,14 @@ func (c *StreamStatisticsCollector) sinkSamples(wg *sync.WaitGroup) {
 			opened, closed, errors, bytes, packets,
 			// Values per second
 			openedDiff, closedDiff, errorsDiff, bytesDiff, packetsDiff,
-			// TODO avg delay between packets
+			// Average values
+			packetDelay,
 		}
 		fields := []string{
 			"streams", "openConnections", "receivingConnections",
 			"opened", "closed", "errors", "bytes", "packets",
 			"opened/s", "closed/s", "errors/s", "bytes/s", "packets/s",
+			"packetDelay",
 		}
 		err := c.OutgoingSink.Sample(
 			&bitflow.Sample{
@@ -250,6 +214,7 @@ func (c *RunningStream) handleStream() {
 	c.col.openConnections.Increment(1)
 	defer c.col.openConnections.Increment(-1)
 	received := false
+	var previousPacketTime time.Time
 	for !c.stopper.Stopped() {
 		num, err := stream.Receive()
 		if num > 0 {
@@ -259,6 +224,11 @@ func (c *RunningStream) handleStream() {
 				received = true
 				c.col.receivingConnections.Increment(1)
 				defer c.col.receivingConnections.Increment(-1)
+			} else {
+				now := time.Now()
+				diff := now.Sub(previousPacketTime)
+				previousPacketTime = now
+				c.col.packetDelay.Add(diff.Seconds())
 			}
 		}
 		if err == io.EOF {
