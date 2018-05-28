@@ -220,16 +220,16 @@ func (c *RunningStream) handleStream() {
 		if num > 0 {
 			c.col.bytes.Increment(uint64(num))
 			c.col.packets.Increment(1)
+			now := time.Now()
 			if !received {
 				received = true
 				c.col.receivingConnections.Increment(1)
 				defer c.col.receivingConnections.Increment(-1)
 			} else {
-				now := time.Now()
 				diff := now.Sub(previousPacketTime)
-				previousPacketTime = now
 				c.col.packetDelay.Add(diff.Seconds())
 			}
+			previousPacketTime = now
 		}
 		if err == io.EOF {
 			c.col.closed.Increment(1)
