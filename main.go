@@ -9,7 +9,7 @@ import (
 	"time"
 
 	bitflow "github.com/antongulenko/go-bitflow"
-	"github.com/antongulenko/go-bitflow-collector/cmd_helper"
+	"github.com/antongulenko/go-bitflow-pipeline/collector_helpers"
 	"github.com/antongulenko/golib"
 	log "github.com/sirupsen/logrus"
 )
@@ -26,7 +26,7 @@ func do_main() int {
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 
-	cmd := cmd_helper.CmdDataCollector{DefaultOutput: "csv://-"}
+	cmd := collector_helpers.CmdDataCollector{DefaultOutput: "csv://-"}
 	cmd.ParseFlags()
 	if flag.NArg() == 0 {
 		golib.Fatalln("Please provide positional arguments (at leat one) for the endpoints to stream from (will be chosen in round robin fashion)")
@@ -53,7 +53,7 @@ func do_main() int {
 }
 
 type StreamStatisticsCollector struct {
-	bitflow.AbstractMetricSource
+	bitflow.AbstractSampleSource
 
 	InitialStreams     int
 	Factory            *RtmpStreamFactory
@@ -120,7 +120,7 @@ func (c *StreamStatisticsCollector) SetNumberOfStreams(num int) {
 	}
 }
 
-func (c *StreamStatisticsCollector) Stop() {
+func (c *StreamStatisticsCollector) Close() {
 	c.stopper.Stop()
 	c.SetNumberOfStreams(0)
 }
