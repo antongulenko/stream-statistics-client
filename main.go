@@ -127,7 +127,7 @@ func (c *StreamStatisticsCollector) Close() {
 
 func (c *StreamStatisticsCollector) sinkSamples(wg *sync.WaitGroup) {
 	defer wg.Done()
-	defer c.CloseSink(wg)
+	defer c.CloseSinkParallel(wg)
 	c.statisticsTime = time.Now()
 	for c.stopper.WaitTimeout(c.SampleSinkInterval) {
 		now := time.Now()
@@ -158,7 +158,7 @@ func (c *StreamStatisticsCollector) sinkSamples(wg *sync.WaitGroup) {
 			"opened/s", "closed/s", "errors/s", "bytes/s", "packets/s",
 			"packetDelay",
 		}
-		err := c.OutgoingSink.Sample(
+		err := c.GetSink().Sample(
 			&bitflow.Sample{
 				Time:   time.Now(),
 				Values: values,
