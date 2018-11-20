@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	bitflow "github.com/antongulenko/go-bitflow"
+	"github.com/bitflow-stream/go-bitflow"
 )
 
 type TwoWayCounter struct {

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	bitflow "github.com/antongulenko/go-bitflow"
-	"github.com/antongulenko/go-bitflow-pipeline/collector_helpers"
 	"github.com/antongulenko/golib"
+	"github.com/bitflow-stream/go-bitflow"
+	"github.com/bitflow-stream/go-bitflow-pipeline/plugin/cmd_collector"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,10 +26,10 @@ func do_main() int {
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 
-	cmd := collector_helpers.CmdDataCollector{DefaultOutput: "csv://-"}
+	cmd := cmd_collector.CmdDataCollector{DefaultOutput: "csv://-"}
 	cmd.ParseFlags()
 	if flag.NArg() == 0 {
-		golib.Fatalln("Please provide positional arguments (at leat one) for the endpoints to stream from (will be chosen in round robin fashion)")
+		golib.Fatalln("Please provide positional arguments (at least one) for the endpoints to stream from (will be chosen in round robin fashion)")
 	}
 	defer golib.ProfileCpu()()
 
@@ -167,7 +167,7 @@ func (c *StreamStatisticsCollector) sinkSamples(wg *sync.WaitGroup) {
 				Fields: fields,
 			})
 		if err != nil {
-			log.Errorln("Failed to sink stream statistcs:", err)
+			log.Errorln("Failed to sink stream statistics:", err)
 		}
 	}
 }

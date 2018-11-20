@@ -28,9 +28,9 @@ func (f *RtmpStreamFactory) nextURL() (string, error) {
 	if len(urls) == 0 {
 		return "", ErrorNoURLs
 	}
-	url := urls[f.opened%len(urls)]
+	nextUrl := urls[f.opened%len(urls)]
 	f.opened++
-	return url, nil
+	return nextUrl, nil
 }
 
 func (f *RtmpStreamFactory) OpenStream() (*RtmpStream, error) {
@@ -74,7 +74,7 @@ func (f *RtmpStreamFactory) OpenStream() (*RtmpStream, error) {
 }
 
 func (f *RtmpStreamFactory) startStream(conn rtmp.ClientConn, streamName string) error {
-	for done := false; !done; {
+	for {
 		select {
 		case msg, ok := <-conn.Events():
 			if !ok {
@@ -104,7 +104,7 @@ type RtmpStream struct {
 }
 
 func (f *RtmpStream) Receive() (int, error) {
-	for done := false; !done; {
+	for {
 		select {
 		case msg, ok := <-f.Conn.Events():
 			if !ok {
