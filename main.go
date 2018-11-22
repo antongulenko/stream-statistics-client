@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/antongulenko/golib"
-	"github.com/bitflow-stream/go-bitflow"
-	"github.com/bitflow-stream/go-bitflow-pipeline/plugin/cmd_collector"
+	"github.com/bitflow-stream/go-bitflow/bitflow"
+	"github.com/bitflow-stream/go-bitflow/cmd"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,8 +26,8 @@ func do_main() int {
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 
-	cmd := cmd_collector.CmdDataCollector{DefaultOutput: "csv://-"}
-	cmd.ParseFlags()
+	helper := cmd.CmdDataCollector{DefaultOutput: "csv://-"}
+	helper.ParseFlags()
 	if flag.NArg() == 0 {
 		golib.Fatalln("Please provide positional arguments (at least one) for the endpoints to stream from (will be chosen in round robin fashion)")
 	}
@@ -43,8 +43,8 @@ func do_main() int {
 		RestartDelay:       *restartDelay,
 		SampleSinkInterval: *sinkInterval,
 	}
-	cmd.RestApis = append(cmd.RestApis, &SetUrlsRestApi{Col: stats})
-	pipe := cmd.MakePipeline()
+	helper.RestApis = append(helper.RestApis, &SetUrlsRestApi{Col: stats})
+	pipe := helper.MakePipeline()
 	pipe.Source = stats
 	for _, str := range pipe.FormatLines() {
 		log.Println(str)
