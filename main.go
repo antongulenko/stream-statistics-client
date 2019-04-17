@@ -27,14 +27,15 @@ func do_main() int {
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 
 	helper := cmd.CmdDataCollector{DefaultOutput: "csv://-"}
-	helper.ParseFlags()
-	if flag.NArg() == 0 {
+	helper.RegisterFlags()
+	_, args := cmd.ParseFlags()
+	if len(args) == 0 {
 		golib.Fatalln("Please provide positional arguments (at least one) for the endpoints to stream from (will be chosen in round robin fashion)")
 	}
 	defer golib.ProfileCpu()()
 
 	factory := &RtmpStreamFactory{
-		URLs:            flag.Args(),
+		URLs:            args,
 		TimeoutDuration: *timeout,
 	}
 	stats := &StreamStatisticsCollector{
@@ -44,7 +45,9 @@ func do_main() int {
 		SampleSinkInterval: *sinkInterval,
 	}
 	helper.RestApis = append(helper.RestApis, &SetUrlsRestApi{Col: stats})
-	pipe := helper.MakePipeline()
+
+	pipe, err := helper.BuildPipeline()
+	golib.Checkerr(err)
 	pipe.Source = stats
 	for _, str := range pipe.FormatLines() {
 		log.Println(str)
@@ -210,6 +213,10 @@ func (c *RunningStream) handleStream() {
 		c.col.errors.Increment(1)
 		return
 	}
+
+	// Make sure the stream is closed when we are finished
+	defer c.stream.Close()
+
 	c.col.opened.Increment(1)
 	c.col.openConnections.Increment(1)
 	defer c.col.openConnections.Increment(-1)

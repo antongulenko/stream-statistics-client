@@ -65,6 +65,7 @@ func (f *RtmpStreamFactory) OpenStream() (*RtmpStream, error) {
 
 	// Wait for the StreamCreatedEvent
 	if err := f.startStream(conn, streamName); err != nil {
+		conn.Close()
 		return nil, err
 	}
 	return &RtmpStream{
@@ -95,7 +96,6 @@ func (f *RtmpStreamFactory) startStream(conn rtmp.ClientConn, streamName string)
 			return fmt.Errorf("Timeout after %v waiting for data from %v", f.TimeoutDuration, conn.URL())
 		}
 	}
-	panic("unreachable")
 }
 
 type RtmpStream struct {
@@ -128,7 +128,6 @@ func (f *RtmpStream) Receive() (int, error) {
 			return 0, fmt.Errorf("No stream started")
 		}
 	}
-	panic("unreachable")
 }
 
 func (f *RtmpStream) Close() {
