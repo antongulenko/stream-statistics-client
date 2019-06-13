@@ -1,6 +1,5 @@
 # antongulenko/stream-statistics-client
-FROM golang:1.11-alpine as build
-ENV GO111MODULE=on
+FROM golang:1.12-alpine as build
 RUN apk --no-cache add git gcc g++ musl-dev
 WORKDIR /build
 COPY . .
