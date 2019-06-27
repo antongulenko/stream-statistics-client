@@ -30,7 +30,7 @@ func do_main() int {
 	helper.RegisterFlags()
 	_, args := cmd.ParseFlags()
 	if len(args) == 0 {
-		golib.Fatalln("Please provide positional arguments (at least one) for the endpoints to stream from (will be chosen in round robin fashion)")
+		log.Fatalln("Please provide positional arguments (at least one) for the endpoints to stream from (will be chosen in round robin fashion)")
 	}
 	defer golib.ProfileCpu()()
 
