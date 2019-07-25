@@ -21,8 +21,12 @@ func main() {
 }
 
 func do_main() int {
+	var delaySampler = RandomDistributionSampler{RandomConstDistribution{0 * time.Millisecond}}
 	parallelStreams := flag.Int("n", 1, "Number of parallel streams to start immediately")
-	restartDelay := flag.Duration("restartDelay", 500*time.Millisecond, "Time before starting a new stream, when a stream ends (with or without error)")
+	flag.Var(&delaySampler, "restartDelayDistribution", "Define an random distribution for the time before starting a stream."+
+		" This is applied, when streams are initially started and when a stream ends (with or without error). Definition format: "+
+		"<distribution type>:<comma separated list of duration parameters>. Supported distribution types and number of required parameters: "+
+		"'const'(1), 'equal'(2), 'norm'(2). Examples: 'const:500ms', 'const:5s', 'norm:100ms,30ms', 'equal:0ms,1s'.")
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 
@@ -30,7 +34,7 @@ func do_main() int {
 	helper.RegisterFlags()
 	_, args := cmd.ParseFlags()
 	if len(args) == 0 {
-		golib.Fatalln("Please provide positional arguments (at least one) for the endpoints to stream from (will be chosen in round robin fashion)")
+		golib.Log.Fatalln("Please provide positional arguments (at least one) for the endpoints to stream from (will be chosen in round robin fashion)")
 	}
 	defer golib.ProfileCpu()()
 
@@ -41,7 +45,7 @@ func do_main() int {
 	stats := &StreamStatisticsCollector{
 		InitialStreams:     *parallelStreams,
 		Factory:            factory,
-		RestartDelay:       *restartDelay,
+		DelaySampler:       delaySampler,
 		SampleSinkInterval: *sinkInterval,
 	}
 	helper.RestApis = append(helper.RestApis, &SetUrlsRestApi{Col: stats})
@@ -60,7 +64,7 @@ type StreamStatisticsCollector struct {
 
 	InitialStreams     int
 	Factory            *RtmpStreamFactory
-	RestartDelay       time.Duration
+	DelaySampler       RandomDistributionSampler
 	SampleSinkInterval time.Duration
 	RestApiEndpoint    string
 
@@ -189,8 +193,8 @@ func (c *RunningStream) start() {
 		defer c.col.wg.Done()
 		defer c.wg.Done()
 		for !c.stopper.Stopped() {
+			c.stopper.WaitTimeout(c.col.DelaySampler.distribution.Sample())
 			c.handleStream()
-			c.stopper.WaitTimeout(c.col.RestartDelay)
 		}
 	}()
 }
