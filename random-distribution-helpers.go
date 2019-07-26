@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"strings"
 	"time"
+	log "github.com/sirupsen/logrus"
 )
 
 type RandomDistribution interface {
@@ -13,7 +14,7 @@ type RandomDistribution interface {
 	String() string
 }
 
-var _ RandomDistribution = RandomConstDistribution(nil)
+var _ RandomDistribution = RandomConstDistribution{}
 
 type RandomConstDistribution struct {
 	value time.Duration
@@ -27,7 +28,7 @@ func (constDist RandomConstDistribution) String() string {
 	return fmt.Sprintf("Constant value: %d.", constDist.value)
 }
 
-var _ RandomDistribution = RandomEqualDistribution(nil)
+var _ RandomDistribution = RandomEqualDistribution{}
 
 type RandomEqualDistribution struct {
 	min time.Duration
@@ -42,7 +43,7 @@ func (equalDist RandomEqualDistribution) String() string {
 	return fmt.Sprintf("Equal distribution between %d and %d.", equalDist.min, equalDist.max)
 }
 
-var _ RandomDistribution = RandomNormalDistribution(nil)
+var _ RandomDistribution = RandomNormalDistribution{}
 
 type RandomNormalDistribution struct {
 	mu    time.Duration
@@ -75,21 +76,20 @@ func (distSampler RandomDistributionSampler) Set(value string) error {
 	if len(typeAndParams) != 2 {
 		return fmt.Errorf(formatErr, "Missing distribution parameters.")
 	}
+	params := strings.Split(typeAndParams[1], ",")
 	switch typeAndParams[0] { // Check the distribution type identifier
 	case "const": // Parse values for constant distribution
-		if len(typeAndParams) != 2 {
-			return fmt.Errorf(formatErr, "Constant distribution type expects one parameter.")
+		if len(params) != 1 {
+			return fmt.Errorf(formatErr, "Constant distribution expects exactly one parameter but got %v.", len(params))
+		}
+		if value, err := time.ParseDuration(typeAndParams[1]);  err == nil {
+			distSampler.distribution = RandomConstDistribution{value: value}
 		} else {
-			if value, err := time.ParseDuration(typeAndParams[1]);  err == nil {
-				distSampler.distribution = RandomConstDistribution{value}
-			} else {
-				return fmt.Errorf(formatErr, err)
-			}
+			return fmt.Errorf(formatErr, err)
 		}
 	case "equal": // Parse values for equal distribution
-		params := strings.Split(typeAndParams[1], ",")
 		if len(params) != 2 {
-			return fmt.Errorf(formatErr, "Equal distribution expects exactly two parameters.")
+			return fmt.Errorf(formatErr, "Equal distribution expects exactly two parameters but got %v.", len(params))
 		} else {
 			min, err := time.ParseDuration(params[0])
 			if err != nil {
@@ -99,12 +99,11 @@ func (distSampler RandomDistributionSampler) Set(value string) error {
 			if err != nil {
 				return fmt.Errorf(formatErr, err)
 			}
-			distSampler.distribution = RandomEqualDistribution{min, max}
+			distSampler.distribution = RandomEqualDistribution{min: min, max: max}
 		}
 	case "norm": // Parse values for normal distribution
-		params := strings.Split(typeAndParams[1], ",")
 		if len(params) != 2 {
-			return fmt.Errorf(formatErr, "Normal distribution expects exactly two parameters.")
+			return fmt.Errorf(formatErr, "Normal distribution expects exactly two parameters but got %v.", len(params))
 		} else {
 			mu, err := time.ParseDuration(params[0])
 			if err != nil {
@@ -114,10 +113,12 @@ func (distSampler RandomDistributionSampler) Set(value string) error {
 			if err != nil {
 				return fmt.Errorf(formatErr, err)
 			}
-			distSampler.distribution = RandomNormalDistribution{mu, sigma}
+			distSampler.distribution = RandomNormalDistribution{mu: mu, sigma: sigma}
 		}
 	default:
-		return fmt.Errorf(formatErr, "Unknown distribution type identifier.")
+		return fmt.Errorf(formatErr, "Unknown distribution type identifier %v.", typeAndParams[0])
 	}
+	log.Printf("Successfully parsed distribution parameter %v. Result: %v", value, distSampler.distribution.String())
+
 	return nil
 }
