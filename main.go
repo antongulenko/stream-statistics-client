@@ -25,7 +25,7 @@ func do_main() int {
 	parallelStreams := flag.Int("n", 1, "Number of parallel streams to start immediately")
 	flag.Var(&delaySampler, "restartDelayDistribution", "Define an random distribution for the time before starting a stream."+
 		" This is applied, when streams are initially started and when a stream ends (with or without error). Definition format: "+
-		"<distribution type>:<comma separated list of duration parameters>. Supported distribution types and number of required parameters: "+
+		"<distribution type>:<comma separated list of duration parameters>. Supported distribution types  (with required parameters): "+
 		"'const:<value>', 'equal:<min_value>,<max_value>', 'norm:<mean>,<std_dev>'. Examples: 'const:500ms', 'const:5s', 'norm:100ms,30ms', 'equal:0ms,1s'.")
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
