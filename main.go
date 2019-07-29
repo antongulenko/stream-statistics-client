@@ -37,12 +37,12 @@ func do_main() int {
 	helper.RegisterFlags()
 	_, args := cmd.ParseFlags()
 	if len(args) > 0 {
-		for _, entry := range args {
-			if host, urls, er := factory.ParseURLArgument(entry); er != nil {
+		for _, urlTemplate := range args {
+			if host, urls, er := factory.ParseURLArgument(urlTemplate); er != nil {
 				factory.hosts = append(factory.hosts, host)
 				factory.hostURLs[host] = append(factory.hostURLs[host], urls...)
 			} else {
-				log.Errorf("Error handling streaming endpoint %v. Reason: %v", entry, er)
+				log.Errorf("Error handling streaming endpoint %v. Reason: %v", urlTemplate, er)
 			}
 		}
 	} else {
