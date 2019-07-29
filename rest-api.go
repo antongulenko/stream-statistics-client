@@ -25,22 +25,34 @@ func (api *SetUrlsRestApi) handleEndpoints(writer http.ResponseWriter, req *http
 	case "POST":
 		lines := api.getRequestLines(writer, req)
 		if len(lines) > 0 {
-			api.Col.Factory.URLs = lines
+			api.Col.Factory.hosts = nil
+			api.Col.Factory.hostURLs = nil
+			for _, entry := range lines {
+				if host, urls, er := api.Col.Factory.ParseURLArgument(entry); er != nil {
+					api.Col.Factory.hosts = append(api.Col.Factory.hosts, host)
+					api.Col.Factory.hostURLs[host] = append(api.Col.Factory.hostURLs[host], urls...)
+				} else {
+					writer.Write([]byte(fmt.Sprintf("Error handling streaming endpoint %v. Reason: %v", entry, er)))
+				}
+			}
 		} else {
 			return
 		}
 	case "PUT":
 		lines := api.getRequestLines(writer, req)
+
 		if len(lines) > 0 {
-			api.Col.Factory.URLs = append(api.Col.Factory.URLs, lines...)
+			for _, entry := range lines {
+				if host, urls, er := api.Col.Factory.ParseURLArgument(entry); er != nil {
+					api.Col.Factory.hosts = append(api.Col.Factory.hosts, host)
+					api.Col.Factory.hostURLs[host] = append(api.Col.Factory.hostURLs[host], urls...)
+				} else {
+					writer.Write([]byte(fmt.Sprintf("Error handling streaming endpoint %v. Reason: %v", entry, er)))
+				}
+			}
 		} else {
 			return
 		}
-	}
-	urls := api.Col.Factory.URLs
-	writer.Write([]byte(fmt.Sprintf("%v active endpoint(s):\n", len(urls))))
-	for _, endpoint := range urls {
-		writer.Write([]byte(endpoint + "\n"))
 	}
 }
 
