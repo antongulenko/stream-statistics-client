@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -30,6 +31,9 @@ func do_main() int {
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 
+	defer golib.ProfileCpu()()
+
+	rand.Seed(time.Now().UTC().UnixNano())
 	factory := &RtmpStreamFactory{
 		TimeoutDuration: *timeout,
 	}
@@ -42,13 +46,12 @@ func do_main() int {
 				factory.hosts = append(factory.hosts, host)
 				factory.hostURLs[host] = append(factory.hostURLs[host], urls...)
 			} else {
-				log.Errorf("Error handling streaming endpoint %v. Reason: %v", urlTemplate, er)
+				log.Errorf("Error handling streaming endpoint %v: %v", urlTemplate, er)
 			}
 		}
 	} else {
 		log.Info("No streaming endpoints defined. Cannot request streams. Use /api/endpoints to add streaming endpoints.")
 	}
-	defer golib.ProfileCpu()()
 
 	stats := &StreamStatisticsCollector{
 		InitialStreams:     *parallelStreams,

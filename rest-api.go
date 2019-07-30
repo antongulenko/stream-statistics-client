@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
+	log "github.com/sirupsen/logrus"
 )
 
 type SetUrlsRestApi struct {
@@ -26,33 +28,32 @@ func (api *SetUrlsRestApi) handleEndpoints(writer http.ResponseWriter, req *http
 		lines := api.getRequestLines(writer, req)
 		if len(lines) > 0 {
 			api.Col.Factory.hosts = nil
-			api.Col.Factory.hostURLs = nil
-			for _, entry := range lines {
-				if host, urls, er := api.Col.Factory.ParseURLArgument(entry); er != nil {
-					api.Col.Factory.hosts = append(api.Col.Factory.hosts, host)
-					api.Col.Factory.hostURLs[host] = append(api.Col.Factory.hostURLs[host], urls...)
-				} else {
-					writer.Write([]byte(fmt.Sprintf("Error handling streaming endpoint %v. Reason: %v", entry, er)))
-				}
-			}
+			api.Col.Factory.hostURLs = make(map[string][]*url.URL)
+			api.appendEndpointURLs(lines, writer)
 		} else {
 			return
 		}
 	case "PUT":
 		lines := api.getRequestLines(writer, req)
-
 		if len(lines) > 0 {
-			for _, entry := range lines {
-				if host, urls, er := api.Col.Factory.ParseURLArgument(entry); er != nil {
-					api.Col.Factory.hosts = append(api.Col.Factory.hosts, host)
-					api.Col.Factory.hostURLs[host] = append(api.Col.Factory.hostURLs[host], urls...)
-				} else {
-					writer.Write([]byte(fmt.Sprintf("Error handling streaming endpoint %v. Reason: %v", entry, er)))
-				}
-			}
+			api.appendEndpointURLs(lines, writer)
 		} else {
 			return
 		}
+	}
+}
+
+func (api *SetUrlsRestApi) appendEndpointURLs(lines []string, writer http.ResponseWriter) {
+	for _, entry := range lines {
+		if host, urls, er := api.Col.Factory.ParseURLArgument(entry); er != nil {
+			api.Col.Factory.hosts = append(api.Col.Factory.hosts, host)
+			api.Col.Factory.hostURLs[host] = append(api.Col.Factory.hostURLs[host], urls...)
+			writer.Write([]byte(fmt.Sprintf("For host %v successfully added following URLs as streaming endpoints: %v", host, urls)))
+		} else {
+			log.Errorf("Error handling streaming endpoint %v: %v", urls, er)
+			writer.Write([]byte(fmt.Sprintf("Error handling streaming endpoint %v: %v", urls, er)))
+		}
+
 	}
 }
 

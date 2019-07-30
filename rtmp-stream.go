@@ -30,7 +30,6 @@ type RtmpStreamFactory struct {
 }
 
 func (f *RtmpStreamFactory) nextURL() (*url.URL, error) {
-	rand.Seed(time.Now().Unix())
 	for i := len(f.hosts); i >= 0; i-- {
 		if nextHost, er := f.nextHost(); er != nil {
 			return nil, ErrorNoURLs
@@ -116,14 +115,15 @@ func (f *RtmpStreamFactory) startStream(conn rtmp.ClientConn, streamName string)
 
 func (f *RtmpStreamFactory) ParseURLArgument(urlArg string) (string, []*url.URL, error) {
 	var host string
+	var unparsedURLs []string
 	var urls []*url.URL
 	var r = regexp.MustCompile(`{{(?P<min>[1-9][0-9]*) (?P<max>[1-9][0-9]*)}}`) // {{123 456}}
 
-	var regexString = "'{{(?P<min>[1-9][0-9]*) (?P<max>[1-9][0-9]*)}}'"
-	var regexInfo = fmt.Sprintf("Use regex that matches patter %v", regexString)
+	var regexPattern = "'{{(?P<min>[1-9][0-9]*) (?P<max>[1-9][0-9]*)}}'"
+	var regexInfo = fmt.Sprintf("Use regex that matches patter %v", regexPattern)
 
 	if r.MatchString(urlArg) { // URL is a template.
-		log.Infoln("Processing template URL %v with regex matching. (Used regex: '%v')", urlArg, regexString)
+		log.Infof("Processing template URL %v with regex matching. (Used regex: '%v')", urlArg, regexPattern)
 		match := r.FindStringSubmatch(urlArg)
 		min, er := strconv.Atoi(match[1])
 		if er != nil {
@@ -136,43 +136,53 @@ func (f *RtmpStreamFactory) ParseURLArgument(urlArg string) (string, []*url.URL,
 		if min > max {
 			return "", nil, fmt.Errorf("Minimal value cannot be greater than maximal value in url %v. %v.", urlArg, regexInfo)
 		}
-		if resultHost, resultURLs, er := f.generateURLs(urlArg, match[0], min, max); er == nil {
-			host = resultHost
-			urls = append(urls, resultURLs...)
+		if urls, er := f.generateURLs(urlArg, match[0], min, max); er == nil {
+			unparsedURLs = append(unparsedURLs, urls...)
 		} else {
 			return "", nil, fmt.Errorf("URL generation based on template URL %v failed. %v: %v", urlArg, regexInfo, er)
 		}
 	} else { // No matching regex expression found in url argument. URL is not a template. Returning it as it is.
-		log.Infoln("URL is not a template. Parsing URL %v without regex matching. (Used regex: '%v')", urlArg, regexString)
-		parsedURL, err := url.Parse(urlArg)
-		if err != nil {
-			return "", nil, fmt.Errorf("Failed to parse URL (%v): %v", urlArg, err)
-		}
-		host = parsedURL.Host
-		urls = append(urls, parsedURL)
+		log.Infof("URL is not a template. Parsing URL %v without regex matching. (Used regex: '%v')", urlArg, regexPattern)
+		unparsedURLs = append(unparsedURLs, urlArg)
 	}
 
-	return host, urls, nil
+	var errorMsg string
+	for _, unparsedURL := range unparsedURLs {
+		parsedURL, err := url.Parse(unparsedURL)
+		if err != nil {
+			if len(errorMsg) == 0 {
+				errorMsg = fmt.Sprintf("%v: %v\n", unparsedURLs, err)
+			} else {
+				errorMsg = fmt.Sprintf("%v, %v: %v\n", errorMsg, unparsedURLs, err)
+			}
+		} else {
+			urls = append(urls, parsedURL)
+		}
+	}
+	if len(urls) > 0 {
+		host = urls[0].Host
+	} else {
+		return "", nil, fmt.Errorf("Failed to parse streaming endpoint urls from template %v", urlArg)
+	}
+	if len(errorMsg) != 0 {
+		return host, urls, nil
+	} else {
+		return "", nil, fmt.Errorf("Following urls that were generated from template url %v could not be parsed: %v", errorMsg)
+	}
 }
 
-func (f *RtmpStreamFactory) generateURLs(urlArg string, toReplace string, min int, max int) (string, []*url.URL, error) {
-	var host string
-	var urls []*url.URL
+func (f *RtmpStreamFactory) generateURLs(urlArg string, toReplace string, min int, max int) ([]string, error) {
+	var urls []string
 
 	if strings.Contains(urlArg, toReplace) {
 		for i := min; i <= max; i++ {
 			unparsedURL := strings.Replace(urlArg, toReplace, strconv.Itoa(i), 1)
-			parsedURL, err := url.Parse(unparsedURL)
-			if err != nil {
-				return "", nil, fmt.Errorf("Failed to parse URL (%v): %v", unparsedURL, err)
-			}
-			host= parsedURL.Host
-			urls = append(urls, parsedURL)
+			urls = append(urls, unparsedURL)
 		}
 	} else {
-		return "", nil, fmt.Errorf("URL generation failed. URL %v does not contain substring %v to replace.", urlArg, toReplace)
+		return nil, fmt.Errorf("URL generation failed. Template URL %v does not contain substring %v to replace.", urlArg, toReplace)
 	}
-	return host, urls, nil
+	return urls, nil
 }
 
 type RtmpStream struct {
