@@ -57,27 +57,10 @@ func (f *RtmpStreamFactory) OpenStream() (*RtmpStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	if parsedURL.Scheme != "rtmp" {
-		return nil, fmt.Errorf("URL does not have 'rtmp' scheme but '%v' scheme", parsedURL.Scheme)
-	}
-	urlPathPrefix, streamName := filepath.Split(parsedURL.Path)
-	if urlPathPrefix == "" || streamName == "" {
-		return nil, fmt.Errorf("URL path needs at least two components (have '%v' and '%v'): %v", urlPathPrefix, streamName, parsedURL.Path)
-	}
-	parsedURL.Path = urlPathPrefix
-
-	// Establish connection
-	dialURL := parsedURL.String()
-	log.Debugln("Dialing RTMP URL:", dialURL)
-	conn, err := rtmp.DialWithDialer(&net.Dialer{Timeout: f.TimeoutDuration}, dialURL, maxRtmpChannelNumber)
-	if err != nil {
+	conn, streamName, err := f.connect(parsedURL)
+	if err == nil {
 		return nil, err
 	}
-	err = conn.Connect()
-	if err != nil {
-		return nil, err
-	}
-
 	// Wait for the StreamCreatedEvent
 	if err := f.startStream(conn, streamName); err != nil {
 		conn.Close()
@@ -87,6 +70,55 @@ func (f *RtmpStreamFactory) OpenStream() (*RtmpStream, error) {
 		Conn:            conn,
 		TimeoutDuration: f.TimeoutDuration,
 	}, nil
+}
+
+func (f *RtmpStreamFactory) TestAllEndpointURLs() string {
+	var counter, successCounter int
+	var failedEntries []string
+	for _, host := range f.hosts {
+		counter += counter + len(f.hostURLs[host])
+		for _, parsedUrl:= range f.hostURLs[host] {
+			_, _, err := f.connect(parsedUrl)
+			if err == nil {
+				failedEntries = append(failedEntries, fmt.Sprintf("Failed to connect to host %v via URL %v: %v", host, parsedUrl.String(), err))
+			} else {
+				successCounter++
+			}
+		}
+	}
+	summary := fmt.Sprintf("Endpoint connection test summary:\n" +
+		"Successfully connected to %v / %v endpoints.\n", counter, successCounter)
+	if len(failedEntries) > 0 {
+		summary = fmt.Sprintf("%v\n Following errors occured:", summary)
+		for _, entry := range failedEntries {
+			summary = fmt.Sprintf("%v\n%v", summary, entry)
+		}
+	}
+	return summary
+}
+
+func (f *RtmpStreamFactory) connect(url *url.URL) (rtmp.ClientConn, string, error) {
+	if url.Scheme != "rtmp" {
+		return nil, "", fmt.Errorf("URL does not have 'rtmp' scheme but '%v' scheme", url.Scheme)
+	}
+	urlPathPrefix, streamName := filepath.Split(url.Path)
+	if urlPathPrefix == "" || streamName == "" {
+		return nil, "", fmt.Errorf("URL path needs at least two components (have '%v' and '%v'): %v", urlPathPrefix, streamName, url.Path)
+	}
+	url.Path = urlPathPrefix
+
+	// Establish connection
+	dialURL := url.String()
+	log.Debugln("Dialing RTMP URL:", dialURL)
+	conn, err := rtmp.DialWithDialer(&net.Dialer{Timeout: f.TimeoutDuration}, dialURL, maxRtmpChannelNumber)
+	if err != nil {
+		return nil, "", err
+	}
+	err = conn.Connect()
+	if err != nil {
+		return nil, "", err
+	}
+	return conn, streamName, nil
 }
 
 func (f *RtmpStreamFactory) startStream(conn rtmp.ClientConn, streamName string) error {

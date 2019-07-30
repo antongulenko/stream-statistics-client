@@ -30,6 +30,8 @@ func do_main() int {
 		"'const:<value>', 'equal:<min_value>,<max_value>', 'norm:<mean>,<std_dev>'. Examples: 'const:500ms', 'const:5s', 'norm:100ms,30ms', 'equal:0ms,1s'.")
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
+	testEndpoints := flag.Bool("test", false, "Test initial endpoints by trying to connect to each and log the summarized results before " +
+		"the regular streaming is started.")
 
 	defer golib.ProfileCpu()()
 
@@ -48,6 +50,9 @@ func do_main() int {
 			} else {
 				log.Errorf("Error handling streaming endpoint %v: %v", urlTemplate, er)
 			}
+		}
+		if *testEndpoints {
+			log.Info(factory.TestAllEndpointURLs())
 		}
 	} else {
 		log.Info("No streaming endpoints defined. Cannot request streams. Use /api/endpoints to add streaming endpoints.")
