@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ func main() {
 }
 
 func do_main() int {
-	var delaySampler = RandomDistributionSampler{distribution: RandomConstDistribution{0 * time.Millisecond}}
+	var delaySampler = RandomDistributionSampler{distribution: &RandomConstDistribution{0 * time.Millisecond}}
 	parallelStreams := flag.Int("n", 1, "Number of parallel streams to start immediately")
 	flag.Var(&delaySampler, "restartDelayDistribution", "Define an random distribution for the time before starting a stream."+
 		" This is applied, when streams are initially started and when a stream ends (with or without error). Definition format: "+
@@ -30,7 +31,7 @@ func do_main() int {
 		"'const:<value>', 'equal:<min_value>,<max_value>', 'norm:<mean>,<std_dev>'. Examples: 'const:500ms', 'const:5s', 'norm:100ms,30ms', 'equal:0ms,1s'.")
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
-	testEndpoints := flag.Bool("test", false, "Test initial endpoints by trying to connect to each and log the summarized results before " +
+	testEndpoints := flag.Bool("test", false, "Test initial endpoints by trying to connect to each and log the summarized results before "+
 		"the regular streaming is started.")
 
 	defer golib.ProfileCpu()()
@@ -38,21 +39,30 @@ func do_main() int {
 	rand.Seed(time.Now().UTC().UnixNano())
 	factory := &RtmpStreamFactory{
 		TimeoutDuration: *timeout,
+		hostURLs:        make(map[string][]*url.URL),
 	}
 	helper := cmd.CmdDataCollector{DefaultOutput: "csv://-"}
 	helper.RegisterFlags()
 	_, args := cmd.ParseFlags()
 	if len(args) > 0 {
 		for _, urlTemplate := range args {
-			if host, urls, er := factory.ParseURLArgument(urlTemplate); er != nil {
-				factory.hosts = append(factory.hosts, host)
+			if host, urls, err := factory.ParseURLArgument(urlTemplate); err == nil {
+				if !contains(factory.hosts, host) {
+					factory.hosts = append(factory.hosts, host)
+				}
 				factory.hostURLs[host] = append(factory.hostURLs[host], urls...)
 			} else {
-				log.Errorf("Error handling streaming endpoint %v: %v", urlTemplate, er)
+				log.Errorf("Error handling streaming endpoint %v: %v", urlTemplate, err)
 			}
 		}
 		if *testEndpoints {
-			log.Info(factory.TestAllEndpointURLs())
+			summary, err := factory.TestAllEndpointURLs()
+			if err == nil {
+				log.Info(summary)
+			} else {
+				log.Info(summary)
+				log.Errorf("%v", err)
+			}
 		}
 	} else {
 		log.Info("No streaming endpoints defined. Cannot request streams. Use /api/endpoints to add streaming endpoints.")
@@ -73,6 +83,15 @@ func do_main() int {
 		log.Println(str)
 	}
 	return pipe.StartAndWait()
+}
+
+func contains(s []string, e string) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
 }
 
 type StreamStatisticsCollector struct {
@@ -225,7 +244,7 @@ func (c *RunningStream) handleStream() {
 	stream, err := c.col.Factory.OpenStream()
 	c.stream = stream
 	if err == ErrorNoURLs {
-		log.Println("No URLs available for streaming, sleeping for %v...")
+		log.Infof("No URLs available for streaming, sleeping for %v...", noUrlsSleepDuration)
 		c.stopper.WaitTimeout(noUrlsSleepDuration)
 		return
 	} else if err != nil {

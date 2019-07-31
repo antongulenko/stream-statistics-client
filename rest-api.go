@@ -45,13 +45,13 @@ func (api *SetUrlsRestApi) handleEndpoints(writer http.ResponseWriter, req *http
 
 func (api *SetUrlsRestApi) appendEndpointURLs(lines []string, writer http.ResponseWriter) {
 	for _, entry := range lines {
-		if host, urls, er := api.Col.Factory.ParseURLArgument(entry); er != nil {
+		if host, urls, err := api.Col.Factory.ParseURLArgument(entry); err != nil {
 			api.Col.Factory.hosts = append(api.Col.Factory.hosts, host)
 			api.Col.Factory.hostURLs[host] = append(api.Col.Factory.hostURLs[host], urls...)
 			writer.Write([]byte(fmt.Sprintf("For host %v successfully added following URLs as streaming endpoints: %v", host, urls)))
 		} else {
-			log.Errorf("Error handling streaming endpoint %v: %v", urls, er)
-			writer.Write([]byte(fmt.Sprintf("Error handling streaming endpoint %v: %v", urls, er)))
+			log.Errorf("Error handling streaming endpoint %v: %v", urls, err)
+			writer.Write([]byte(fmt.Sprintf("Error handling streaming endpoint %v: %v", urls, err)))
 		}
 
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/antongulenko/golib"
 	"io"
 	"math/rand"
 	"net"
@@ -21,6 +22,10 @@ const maxRtmpChannelNumber = 100
 
 var ErrorNoURLs = errors.New("No URLs available for streaming...")
 
+const urlTemplateRegexString = "{{(?P<min>[1-9][0-9]*) (?P<max>[1-9][0-9]*)}}" // {{123 456}}
+
+var urlTemplateRegex = regexp.MustCompile(urlTemplateRegexString)
+
 type RtmpStreamFactory struct {
 	hosts                []string
 	hostURLs             map[string][]*url.URL
@@ -31,11 +36,13 @@ type RtmpStreamFactory struct {
 
 func (f *RtmpStreamFactory) nextURL() (*url.URL, error) {
 	for i := len(f.hosts); i >= 0; i-- {
-		if nextHost, er := f.nextHost(); er != nil {
+		if nextHost, err := f.nextHost(); err != nil {
 			return nil, ErrorNoURLs
 		} else {
 			if len(f.hostURLs[nextHost]) > 0 { // Success
-				return f.hostURLs[nextHost][rand.Intn(len(f.hostURLs[nextHost]))], nil // Pick random URL of that host
+				hostLen := len(f.hostURLs[nextHost])
+				randomIndex := rand.Intn(hostLen)
+				return f.hostURLs[nextHost][rand.Intn(randomIndex)], nil // Pick random URL of that host
 			}
 		}
 	}
@@ -72,29 +79,31 @@ func (f *RtmpStreamFactory) OpenStream() (*RtmpStream, error) {
 	}, nil
 }
 
-func (f *RtmpStreamFactory) TestAllEndpointURLs() string {
-	var counter, successCounter int
-	var failedEntries []string
+func (f *RtmpStreamFactory) TestAllEndpointURLs() (string, error) {
+	var counter, successCounter = 0, 0
+	var multiErr = golib.MultiError{}
 	for _, host := range f.hosts {
-		counter += counter + len(f.hostURLs[host])
-		for _, parsedUrl:= range f.hostURLs[host] {
-			_, _, err := f.connect(parsedUrl)
+		counter += len(f.hostURLs[host])
+		for _, parsedUrl := range f.hostURLs[host] {
+			conn, _, err := f.connect(parsedUrl)
 			if err == nil {
-				failedEntries = append(failedEntries, fmt.Sprintf("Failed to connect to host %v via URL %v: %v", host, parsedUrl.String(), err))
-			} else {
 				successCounter++
+			} else {
+				multiErr.Add(fmt.Errorf("Failed to connect to host %v via URL %v: %v",
+					host, parsedUrl.String(), err))
+			}
+			if conn != nil {
+				conn.Close()
 			}
 		}
 	}
-	summary := fmt.Sprintf("Endpoint connection test summary:\n" +
-		"Successfully connected to %v / %v endpoints.\n", counter, successCounter)
-	if len(failedEntries) > 0 {
+	summary := fmt.Sprintf("Endpoint connection test summary: Successfully connected to %v / %v endpoints.",
+		successCounter, counter)
+	err := multiErr.NilOrError()
+	if err != nil {
 		summary = fmt.Sprintf("%v\n Following errors occured:", summary)
-		for _, entry := range failedEntries {
-			summary = fmt.Sprintf("%v\n%v", summary, entry)
-		}
 	}
-	return summary
+	return summary, err
 }
 
 func (f *RtmpStreamFactory) connect(url *url.URL) (rtmp.ClientConn, string, error) {
@@ -149,58 +158,50 @@ func (f *RtmpStreamFactory) ParseURLArgument(urlArg string) (string, []*url.URL,
 	var host string
 	var unparsedURLs []string
 	var urls []*url.URL
-	var r = regexp.MustCompile(`{{(?P<min>[1-9][0-9]*) (?P<max>[1-9][0-9]*)}}`) // {{123 456}}
 
-	var regexPattern = "'{{(?P<min>[1-9][0-9]*) (?P<max>[1-9][0-9]*)}}'"
-	var regexInfo = fmt.Sprintf("Use regex that matches patter %v", regexPattern)
+	var regexInfo = fmt.Sprintf("Use regex that matches pattern '%v'", urlTemplateRegexString)
 
-	if r.MatchString(urlArg) { // URL is a template.
-		log.Infof("Processing template URL %v with regex matching. (Used regex: '%v')", urlArg, regexPattern)
-		match := r.FindStringSubmatch(urlArg)
-		min, er := strconv.Atoi(match[1])
-		if er != nil {
-			return "", nil, fmt.Errorf("Failed to parse minimal value from url %v. %v: %v", urlArg, regexInfo, er)
+	if urlTemplateRegex.MatchString(urlArg) { // URL is a template.
+		log.Infof("Processing template URL %v with regex matching. (Used regex: '%v')", urlArg, urlTemplateRegexString)
+		match := urlTemplateRegex.FindStringSubmatch(urlArg)
+		min, err := strconv.Atoi(match[1])
+		if err != nil {
+			return "", nil, fmt.Errorf("Failed to parse minimal value from url %v. %v: %v", urlArg, regexInfo, err)
 		}
-		max, er := strconv.Atoi(match[2])
-		if er != nil {
-			return "", nil, fmt.Errorf("Failed to parse maximal value from url %v. %v: %v", urlArg, regexInfo, er)
+		max, err := strconv.Atoi(match[2])
+		if err != nil {
+			return "", nil, fmt.Errorf("Failed to parse maximal value from url %v. %v: %v", urlArg, regexInfo, err)
 		}
 		if min > max {
 			return "", nil, fmt.Errorf("Minimal value cannot be greater than maximal value in url %v. %v.", urlArg, regexInfo)
 		}
-		if urls, er := f.generateURLs(urlArg, match[0], min, max); er == nil {
+		if urls, err := f.generateURLs(urlArg, match[0], min, max); err == nil {
 			unparsedURLs = append(unparsedURLs, urls...)
 		} else {
-			return "", nil, fmt.Errorf("URL generation based on template URL %v failed. %v: %v", urlArg, regexInfo, er)
+			return "", nil, fmt.Errorf("URL generation based on template URL %v failed. %v: %v", urlArg, regexInfo, err)
 		}
 	} else { // No matching regex expression found in url argument. URL is not a template. Returning it as it is.
-		log.Infof("URL is not a template. Parsing URL %v without regex matching. (Used regex: '%v')", urlArg, regexPattern)
+		log.Infof("URL is not a template. Parsing URL %v without regex matching. (Used regex: '%v')", urlArg, urlTemplateRegexString)
 		unparsedURLs = append(unparsedURLs, urlArg)
 	}
 
-	var errorMsg string
+	var multiErr = golib.MultiError{}
 	for _, unparsedURL := range unparsedURLs {
 		parsedURL, err := url.Parse(unparsedURL)
 		if err != nil {
-			if len(errorMsg) == 0 {
-				errorMsg = fmt.Sprintf("%v: %v\n", unparsedURLs, err)
-			} else {
-				errorMsg = fmt.Sprintf("%v, %v: %v\n", errorMsg, unparsedURLs, err)
-			}
+			multiErr.Add(fmt.Errorf("Failed to parse URL %v: %v", unparsedURL, err))
 		} else {
+			log.Debugf("Parsed URL %v from URL template %v.", parsedURL.String(), urlArg)
 			urls = append(urls, parsedURL)
 		}
 	}
+	err := multiErr.NilOrError()
 	if len(urls) > 0 {
 		host = urls[0].Host
 	} else {
-		return "", nil, fmt.Errorf("Failed to parse streaming endpoint urls from template %v", urlArg)
+		return "", nil, fmt.Errorf("Failed to parse streaming endpoint urls from template %v: ", urlArg, err)
 	}
-	if len(errorMsg) != 0 {
-		return host, urls, nil
-	} else {
-		return "", nil, fmt.Errorf("Following urls that were generated from template url %v could not be parsed: %v", errorMsg)
-	}
+	return host, urls, err
 }
 
 func (f *RtmpStreamFactory) generateURLs(urlArg string, toReplace string, min int, max int) ([]string, error) {

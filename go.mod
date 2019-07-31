@@ -6,5 +6,6 @@ require (
 	github.com/bitflow-stream/go-bitflow v0.0.41
 	github.com/gorilla/mux v1.7.2
 	github.com/sirupsen/logrus v1.4.2
+	github.com/stretchr/testify v1.3.0
 	github.com/zhangpeihao/goamf v0.0.0-20140409082417-3ff2c19514a8 // indirect
 )
