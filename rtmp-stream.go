@@ -42,7 +42,7 @@ func (f *RtmpStreamFactory) nextURL() (*url.URL, error) {
 			if len(f.hostURLs[nextHost]) > 0 { // Success
 				hostLen := len(f.hostURLs[nextHost])
 				randomIndex := rand.Intn(hostLen)
-				return f.hostURLs[nextHost][rand.Intn(randomIndex)], nil // Pick random URL of that host
+				return f.hostURLs[nextHost][randomIndex], nil // Pick random URL of that host
 			}
 		}
 	}
@@ -199,7 +199,7 @@ func (f *RtmpStreamFactory) ParseURLArgument(urlArg string) (string, []*url.URL,
 	if len(urls) > 0 {
 		host = urls[0].Host
 	} else {
-		return "", nil, fmt.Errorf("Failed to parse streaming endpoint urls from template %v: ", urlArg, err)
+		return "", nil, fmt.Errorf("Failed to parse streaming endpoint urls from template %v: %v", urlArg, err)
 	}
 	return host, urls, err
 }

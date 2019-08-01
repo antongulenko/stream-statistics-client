@@ -111,11 +111,11 @@ func (distSampler *RandomDistributionSampler) Set(value string) error {
 		if len(params) != 2 {
 			return fmt.Errorf(formatErr, "Normal distribution expects exactly two parameters but got %v.", len(params))
 		} else {
-			mu, err := distSampler.parseDuration(params[0])
+			mu, err := parseDuration(params[0])
 			if err != nil {
 				return fmt.Errorf(formatErr, err)
 			}
-			sigma, err := distSampler.parseDuration(params[1])
+			sigma, err := parseDuration(params[1])
 			if err != nil {
 				return fmt.Errorf(formatErr, err)
 			}
@@ -129,12 +129,12 @@ func (distSampler *RandomDistributionSampler) Set(value string) error {
 	return nil
 }
 
-func (distSampler RandomDistributionSampler) parseDuration(value string) (time.Duration, error) {
+func parseDuration(value string) (time.Duration, error) {
 	timeValue, err := time.ParseDuration(value)
-	if err == nil && timeValue >= 0 {
-		return timeValue, nil
+	if err != nil && timeValue >= 0 {
+		return -1, err
 	} else if err == nil && timeValue < 0 {
 		return -1, fmt.Errorf("Distribution argument must be a positive time value but actually is %v", timeValue)
 	}
-	return -1, err
+	return timeValue, nil
 }
