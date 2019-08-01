@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-func compare(t *testing.T, expected RandomDistributionSampler, actual RandomDistributionSampler) {
+func compare(t *testing.T, expected DistributionSampler, actual DistributionSampler) {
 	assert := testAssert.New(t)
 	assert.Equal(expected, actual)
 }
 
-func parse(t *testing.T, distString string, expectedError bool) RandomDistributionSampler {
+func parse(t *testing.T, distString string, expectedError bool) DistributionSampler {
 	assert := testAssert.New(t)
-	actual := RandomDistributionSampler{}
+	actual := DistributionSampler{}
 	err := actual.Set(distString)
 	if expectedError {
 		assert.Error(err, distString)
@@ -31,8 +31,8 @@ func TestConstantDistribution(t *testing.T) {
 		if value < 0 {
 			_ = parse(t, constDistString, true)
 		} else {
-			expected := RandomDistributionSampler{
-				distribution: &RandomConstDistribution{value: time.Second * time.Duration(value)},
+			expected := DistributionSampler{
+				distribution: &ConstDistribution{value: time.Second * time.Duration(value)},
 			}
 			actual := parse(t, constDistString, false)
 			compare(t, expected, actual)
@@ -48,8 +48,8 @@ func TestEqualDistribution(t *testing.T) {
 			if min < 0 || max < 0 {
 				_ = parse(t, equalDistString, true)
 			} else {
-				expected := RandomDistributionSampler{
-					distribution: &RandomEqualDistribution{
+				expected := DistributionSampler{
+					distribution: &EqualDistribution{
 						min: time.Second * time.Duration(min),
 						max: time.Second * time.Duration(max)},
 				}
@@ -68,8 +68,8 @@ func TestNormalDistribution(t *testing.T) {
 			if mu < 0 || sigma < 0 {
 				_ = parse(t, normDistString, true)
 			} else {
-				expected := RandomDistributionSampler{
-					distribution: &RandomNormalDistribution{
+				expected := DistributionSampler{
+					distribution: &NormalDistribution{
 						mu: time.Second * time.Duration(mu),
 						sigma: time.Second * time.Duration(sigma)},
 				}

@@ -9,63 +9,62 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type RandomDistribution interface {
+type Distribution interface {
 	Sample() time.Duration
 	String() string
 }
 
-var _ RandomDistribution = &RandomConstDistribution{}
+var _ Distribution = &ConstDistribution{}
 
-type RandomConstDistribution struct {
+type ConstDistribution struct {
 	value time.Duration
 }
 
-func (constDist *RandomConstDistribution) Sample() time.Duration {
+func (constDist *ConstDistribution) Sample() time.Duration {
 	return constDist.value
 }
 
-func (constDist *RandomConstDistribution) String() string {
-	return fmt.Sprintf("Constant value: %v ms.", int64(constDist.value/time.Millisecond))
+func (constDist *ConstDistribution) String() string {
+	return fmt.Sprintf("Constant value: %v.", constDist.value)
 }
 
-var _ RandomDistribution = &RandomEqualDistribution{}
+var _ Distribution = &EqualDistribution{}
 
-type RandomEqualDistribution struct {
+type EqualDistribution struct {
 	min time.Duration
 	max time.Duration
 }
 
-func (equalDist *RandomEqualDistribution) Sample() time.Duration {
+func (equalDist *EqualDistribution) Sample() time.Duration {
 	return time.Duration(rand.Int63n(int64(equalDist.max)-int64(equalDist.min)) + int64(equalDist.min))
 }
 
-func (equalDist *RandomEqualDistribution) String() string {
-	return fmt.Sprintf("Equal distribution between %v ms and %v ms.",
-		int64(equalDist.min/time.Millisecond), int64(equalDist.max/time.Millisecond))
+func (equalDist *EqualDistribution) String() string {
+	return fmt.Sprintf("Equal distribution between %v and %v.", equalDist.min, equalDist.max)
 }
 
-var _ RandomDistribution = &RandomNormalDistribution{}
+var _ Distribution = &NormalDistribution{}
 
-type RandomNormalDistribution struct {
+type NormalDistribution struct {
 	mu    time.Duration
 	sigma time.Duration
 }
 
-func (normDist *RandomNormalDistribution) Sample() time.Duration {
+func (normDist *NormalDistribution) Sample() time.Duration {
 	value := math.Round(rand.NormFloat64()*float64(normDist.sigma) + float64(normDist.mu))
 	return time.Duration(value)
 }
 
-func (normDist *RandomNormalDistribution) String() string {
-	return fmt.Sprintf("Normal distribution with mean %v ms and standard deviation %v ms.",
-		int64(normDist.mu/time.Millisecond), int64(normDist.sigma/time.Millisecond))
+func (normDist *NormalDistribution) String() string {
+	return fmt.Sprintf("Normal distribution with mean %v ms and standard deviation %v.",
+		int64(normDist.mu/time.Millisecond), normDist.sigma)
 }
 
-type RandomDistributionSampler struct {
-	distribution RandomDistribution
+type DistributionSampler struct {
+	distribution Distribution
 }
 
-func (distSampler *RandomDistributionSampler) String() string {
+func (distSampler *DistributionSampler) String() string {
 	if distSampler.distribution != nil {
 		return distSampler.distribution.String()
 	} else {
@@ -73,7 +72,7 @@ func (distSampler *RandomDistributionSampler) String() string {
 	}
 }
 
-func (distSampler *RandomDistributionSampler) Set(value string) error {
+func (distSampler *DistributionSampler) Set(value string) error {
 	formatErr := "Invalid random argument format. Please use format [const|equal|norm]:[param1, param2,...]. Reason: %v"
 	if len(value) == 0 || !strings.Contains(value, ":") {
 		return fmt.Errorf(formatErr, "Distribution type and parameters must be devided by ':'.")
@@ -88,8 +87,8 @@ func (distSampler *RandomDistributionSampler) Set(value string) error {
 		if len(params) != 1 {
 			return fmt.Errorf(formatErr, "Constant distribution expects exactly one parameter but got %v.", len(params))
 		}
-		if value, err := distSampler.parseDuration(typeAndParams[1]); err == nil {
-			distSampler.distribution = &RandomConstDistribution{value: value}
+		if value, err := parseDuration(typeAndParams[1]); err == nil {
+			distSampler.distribution = &ConstDistribution{value: value}
 		} else {
 			return fmt.Errorf(formatErr, err)
 		}
@@ -97,7 +96,7 @@ func (distSampler *RandomDistributionSampler) Set(value string) error {
 		if len(params) != 2 {
 			return fmt.Errorf(formatErr, "Equal distribution expects exactly two parameters but got %v.", len(params))
 		} else {
-			min, err := distSampler.parseDuration(params[0])
+			min, err := parseDuration(params[0])
 			if err != nil {
 				return fmt.Errorf(formatErr, err)
 			}
@@ -105,7 +104,7 @@ func (distSampler *RandomDistributionSampler) Set(value string) error {
 			if err != nil {
 				return fmt.Errorf(formatErr, err)
 			}
-			distSampler.distribution = &RandomEqualDistribution{min: min, max: max}
+			distSampler.distribution = &EqualDistribution{min: min, max: max}
 		}
 	case "norm": // Parse values for normal distribution
 		if len(params) != 2 {
@@ -119,7 +118,7 @@ func (distSampler *RandomDistributionSampler) Set(value string) error {
 			if err != nil {
 				return fmt.Errorf(formatErr, err)
 			}
-			distSampler.distribution = &RandomNormalDistribution{mu: mu, sigma: sigma}
+			distSampler.distribution = &NormalDistribution{mu: mu, sigma: sigma}
 		}
 	default:
 		return fmt.Errorf(formatErr, "Unknown distribution type identifier %v.", typeAndParams[0])

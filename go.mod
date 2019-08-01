@@ -1,6 +1,7 @@
 module github.com/antongulenko/stream-statistics-client
 
 require (
+	github.com/antongulenko/golearn v0.0.1
 	github.com/antongulenko/golib v0.0.17
 	github.com/antongulenko/rtmpclient v0.0.0-20180524134433-580bc4d1a64a
 	github.com/bitflow-stream/go-bitflow v0.0.41

@@ -23,7 +23,7 @@ func main() {
 }
 
 func do_main() int {
-	var delaySampler = RandomDistributionSampler{distribution: &RandomConstDistribution{0 * time.Millisecond}}
+	var delaySampler DistributionSampler
 	parallelStreams := flag.Int("n", 1, "Number of parallel streams to start immediately")
 	flag.Var(&delaySampler, "restartDelayDistribution", "Define an random distribution for the time before starting a stream."+
 		" This is applied, when streams are initially started and when a stream ends (with or without error). Definition format: "+
@@ -33,6 +33,10 @@ func do_main() int {
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
 	testEndpoints := flag.Bool("test", false, "Test initial endpoints by trying to connect to each and log the summarized results before "+
 		"the regular streaming is started.")
+	if delaySampler.distribution == nil {
+		delaySampler = DistributionSampler{distribution: &ConstDistribution{0 * time.Millisecond}}
+		log.Infof("No restart delay distribution defined. Using: %v", delaySampler.String())
+	}
 
 	defer golib.ProfileCpu()()
 
@@ -57,10 +61,8 @@ func do_main() int {
 		}
 		if *testEndpoints {
 			summary, err := factory.TestAllEndpointURLs()
-			if err == nil {
-				log.Info(summary)
-			} else {
-				log.Info(summary)
+			log.Info(summary)
+			if err != nil {
 				log.Errorf("%v", err)
 			}
 		}
@@ -99,7 +101,7 @@ type StreamStatisticsCollector struct {
 
 	InitialStreams     int
 	Factory            *RtmpStreamFactory
-	DelaySampler       RandomDistributionSampler
+	DelaySampler       DistributionSampler
 	SampleSinkInterval time.Duration
 	RestApiEndpoint    string
 
