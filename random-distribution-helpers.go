@@ -56,8 +56,7 @@ func (normDist *NormalDistribution) Sample() time.Duration {
 }
 
 func (normDist *NormalDistribution) String() string {
-	return fmt.Sprintf("Normal distribution with mean %v ms and standard deviation %v.",
-		int64(normDist.mu/time.Millisecond), normDist.sigma)
+	return fmt.Sprintf("Normal distribution with mean %v and standard deviation %v.", normDist.mu, normDist.sigma)
 }
 
 type DistributionSampler struct {
