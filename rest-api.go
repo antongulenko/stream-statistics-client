@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
+	log "github.com/sirupsen/logrus"
 )
 
 type SetUrlsRestApi struct {
@@ -25,22 +27,33 @@ func (api *SetUrlsRestApi) handleEndpoints(writer http.ResponseWriter, req *http
 	case "POST":
 		lines := api.getRequestLines(writer, req)
 		if len(lines) > 0 {
-			api.Col.Factory.URLs = lines
+			api.Col.Factory.hosts = nil
+			api.Col.Factory.hostURLs = make(map[string][]*url.URL)
+			api.appendEndpointURLs(lines, writer)
 		} else {
 			return
 		}
 	case "PUT":
 		lines := api.getRequestLines(writer, req)
 		if len(lines) > 0 {
-			api.Col.Factory.URLs = append(api.Col.Factory.URLs, lines...)
+			api.appendEndpointURLs(lines, writer)
 		} else {
 			return
 		}
 	}
-	urls := api.Col.Factory.URLs
-	writer.Write([]byte(fmt.Sprintf("%v active endpoint(s):\n", len(urls))))
-	for _, endpoint := range urls {
-		writer.Write([]byte(endpoint + "\n"))
+}
+
+func (api *SetUrlsRestApi) appendEndpointURLs(lines []string, writer http.ResponseWriter) {
+	for _, entry := range lines {
+		if host, urls, err := api.Col.Factory.ParseURLArgument(entry); err != nil {
+			api.Col.Factory.hosts = append(api.Col.Factory.hosts, host)
+			api.Col.Factory.hostURLs[host] = append(api.Col.Factory.hostURLs[host], urls...)
+			writer.Write([]byte(fmt.Sprintf("For host %v successfully added following URLs as streaming endpoints: %v", host, urls)))
+		} else {
+			log.Errorf("Error handling streaming endpoint %v: %v", urls, err)
+			writer.Write([]byte(fmt.Sprintf("Error handling streaming endpoint %v: %v", urls, err)))
+		}
+
 	}
 }
 

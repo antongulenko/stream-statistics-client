@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -21,7 +23,7 @@ func main() {
 }
 
 func do_main() int {
-	var delaySampler = RandomDistributionSampler{distribution: RandomConstDistribution{0 * time.Millisecond}}
+	var delaySampler DistributionSampler
 	parallelStreams := flag.Int("n", 1, "Number of parallel streams to start immediately")
 	flag.Var(&delaySampler, "restartDelayDistribution", "Define an random distribution for the time before starting a stream."+
 		" This is applied, when streams are initially started and when a stream ends (with or without error). Definition format: "+
@@ -29,19 +31,45 @@ func do_main() int {
 		"'const:<value>', 'equal:<min_value>,<max_value>', 'norm:<mean>,<std_dev>'. Examples: 'const:500ms', 'const:5s', 'norm:100ms,30ms', 'equal:0ms,1s'.")
 	sinkInterval := flag.Duration("si", 1000*time.Millisecond, "Interval in which to send out stream statistics")
 	timeout := flag.Duration("timeout", 5*time.Second, "Timeout for RTMP streams")
+	testEndpoints := flag.Bool("test", false, "Test initial endpoints by trying to connect to each and log the summarized results before "+
+		"the regular streaming is started.")
+	if delaySampler.distribution == nil {
+		delaySampler = DistributionSampler{distribution: &ConstDistribution{0 * time.Millisecond}}
+		log.Infof("No restart delay distribution defined. Using: %v", delaySampler.String())
+	}
 
+	defer golib.ProfileCpu()()
+
+	rand.Seed(time.Now().UTC().UnixNano())
+	factory := &RtmpStreamFactory{
+		TimeoutDuration: *timeout,
+		hostURLs:        make(map[string][]*url.URL),
+	}
 	helper := cmd.CmdDataCollector{DefaultOutput: "csv://-"}
 	helper.RegisterFlags()
 	_, args := cmd.ParseFlags()
-	if len(args) == 0 {
-		log.Fatalln("Please provide positional arguments (at least one) for the endpoints to stream from (will be chosen in round robin fashion)")
+	if len(args) > 0 {
+		for _, urlTemplate := range args {
+			if host, urls, err := factory.ParseURLArgument(urlTemplate); err == nil {
+				if !contains(factory.hosts, host) {
+					factory.hosts = append(factory.hosts, host)
+				}
+				factory.hostURLs[host] = append(factory.hostURLs[host], urls...)
+			} else {
+				log.Errorf("Error handling streaming endpoint %v: %v", urlTemplate, err)
+			}
+		}
+		if *testEndpoints {
+			summary, err := factory.TestAllEndpointURLs()
+			log.Info(summary)
+			if err != nil {
+				log.Errorf("%v", err)
+			}
+		}
+	} else {
+		log.Info("No streaming endpoints defined. Cannot request streams. Use /api/endpoints to add streaming endpoints.")
 	}
-	defer golib.ProfileCpu()()
 
-	factory := &RtmpStreamFactory{
-		URLs:            args,
-		TimeoutDuration: *timeout,
-	}
 	stats := &StreamStatisticsCollector{
 		InitialStreams:     *parallelStreams,
 		Factory:            factory,
@@ -59,12 +87,21 @@ func do_main() int {
 	return pipe.StartAndWait()
 }
 
+func contains(s []string, e string) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
 type StreamStatisticsCollector struct {
 	bitflow.AbstractSampleSource
 
 	InitialStreams     int
 	Factory            *RtmpStreamFactory
-	DelaySampler       RandomDistributionSampler
+	DelaySampler       DistributionSampler
 	SampleSinkInterval time.Duration
 	RestApiEndpoint    string
 
@@ -209,7 +246,7 @@ func (c *RunningStream) handleStream() {
 	stream, err := c.col.Factory.OpenStream()
 	c.stream = stream
 	if err == ErrorNoURLs {
-		log.Println("No URLs available for streaming, sleeping for %v...")
+		log.Infof("No URLs available for streaming, sleeping for %v...", noUrlsSleepDuration)
 		c.stopper.WaitTimeout(noUrlsSleepDuration)
 		return
 	} else if err != nil {
