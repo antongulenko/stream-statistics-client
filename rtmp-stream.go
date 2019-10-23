@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/antongulenko/golib"
 	"io"
 	"math/rand"
 	"net"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/antongulenko/golib"
 
 	rtmp "github.com/antongulenko/rtmpclient"
 	log "github.com/sirupsen/logrus"
@@ -26,46 +27,88 @@ const urlTemplateRegexString = "{{(?P<min>[1-9][0-9]*) (?P<max>[1-9][0-9]*)}}" /
 
 var urlTemplateRegex = regexp.MustCompile(urlTemplateRegexString)
 
-type RtmpStreamFactory struct {
-	hosts                []string
-	hostURLs             map[string][]*url.URL
-	TimeoutDuration      time.Duration
-	hostSelectionCounter int
-	opened               int
+type RtmpEndpoint struct {
+	url *url.URL
+
+	// Meta info about the RTMP stream
+	pixels uint
 }
 
-func (f *RtmpStreamFactory) nextURL() (*url.URL, error) {
+type RtmpHost struct {
+	host      string
+	endpoints []*RtmpEndpoint
+}
+
+func (h *RtmpHost) getRandomEndpoint() *RtmpEndpoint {
+	numEndpoints := len(h.endpoints)
+	randomIndex := rand.Intn(numEndpoints)
+	return h.endpoints[randomIndex]
+}
+
+func (h *RtmpHost) addEndpoints(endpoints []*RtmpEndpoint) {
+	h.endpoints = append(h.endpoints, endpoints...)
+}
+
+type RtmpStreamFactory struct {
+	hosts       []*RtmpHost
+	hostCounter int
+
+	TimeoutDuration time.Duration
+}
+
+func (f *RtmpStreamFactory) printEndpoints(writer io.Writer) {
+	fmt.Fprintln(writer, "Active endpoints:")
+	for i, host := range f.hosts {
+		fmt.Fprintf(writer, "\tHost %v: %v (%v endpoint(s))\n", i, host.host, len(host.endpoints))
+		for j, endpoint := range host.endpoints {
+			fmt.Fprintf(writer, "\t\tEndpoint %v (pixels: %v): %v\n", j, endpoint.pixels, endpoint.url)
+		}
+	}
+}
+
+func (f *RtmpStreamFactory) getHost(host string) *RtmpHost {
+	for _, existingHost := range f.hosts {
+		if existingHost.host == host {
+			return existingHost
+		}
+	}
+	newHost := &RtmpHost{
+		host: host,
+	}
+	f.hosts = append(f.hosts, newHost)
+	return newHost
+}
+
+func (f *RtmpStreamFactory) nextEndpoint() (*RtmpEndpoint, error) {
 	for i := len(f.hosts); i >= 0; i-- {
 		if nextHost, err := f.nextHost(); err != nil {
 			return nil, ErrorNoURLs
 		} else {
-			if len(f.hostURLs[nextHost]) > 0 { // Success
-				hostLen := len(f.hostURLs[nextHost])
-				randomIndex := rand.Intn(hostLen)
-				return f.hostURLs[nextHost][randomIndex], nil // Pick random URL of that host
+			if len(nextHost.endpoints) > 0 { // Success
+				return nextHost.getRandomEndpoint(), nil
 			}
 		}
 	}
 	return nil, ErrorNoURLs
 }
 
-func (f *RtmpStreamFactory) nextHost() (string, error) {
+func (f *RtmpStreamFactory) nextHost() (*RtmpHost, error) {
 	hosts := f.hosts
 	if len(hosts) == 0 {
-		return "", ErrorNoURLs
+		return nil, ErrorNoURLs
 	}
-	nextHost := hosts[f.hostSelectionCounter%len(hosts)]
-	f.hostSelectionCounter++
+	nextHost := hosts[f.hostCounter%len(hosts)]
+	f.hostCounter++
 	return nextHost, nil
 }
 
 func (f *RtmpStreamFactory) OpenStream() (*RtmpStream, error) {
-	parsedURL, err := f.nextURL()
+	rtmpEndpoint, err := f.nextEndpoint()
 	if err != nil {
 		return nil, err
 	}
-	conn, streamName, err := f.connect(parsedURL)
-	if err == nil {
+	conn, streamName, err := f.connect(rtmpEndpoint.url)
+	if err != nil {
 		return nil, err
 	}
 	// Wait for the StreamCreatedEvent
@@ -76,6 +119,7 @@ func (f *RtmpStreamFactory) OpenStream() (*RtmpStream, error) {
 	return &RtmpStream{
 		Conn:            conn,
 		TimeoutDuration: f.TimeoutDuration,
+		Endpoint:        rtmpEndpoint,
 	}, nil
 }
 
@@ -83,14 +127,14 @@ func (f *RtmpStreamFactory) TestAllEndpointURLs() (string, error) {
 	var counter, successCounter = 0, 0
 	var multiErr = golib.MultiError{}
 	for _, host := range f.hosts {
-		counter += len(f.hostURLs[host])
-		for _, parsedUrl := range f.hostURLs[host] {
-			conn, _, err := f.connect(parsedUrl)
+		counter += len(host.endpoints)
+		for _, endpoint := range host.endpoints {
+			conn, _, err := f.connect(endpoint.url)
 			if err == nil {
 				successCounter++
 			} else {
 				multiErr.Add(fmt.Errorf("Failed to connect to host %v via URL %v: %v",
-					host, parsedUrl.String(), err))
+					host, endpoint.url.String(), err))
 			}
 			if conn != nil {
 				conn.Close()
@@ -112,7 +156,7 @@ func (f *RtmpStreamFactory) connect(url *url.URL) (rtmp.ClientConn, string, erro
 	}
 	urlPathPrefix, streamName := filepath.Split(url.Path)
 	if urlPathPrefix == "" || streamName == "" {
-		return nil, "", fmt.Errorf("URL path needs at least two components (have '%v' and '%v'): %v", urlPathPrefix, streamName, url.Path)
+		return nil, "", fmt.Errorf("URL path '%v' needs at least two components (have '%v' and '%v'): %v", url.Path, urlPathPrefix, streamName, url)
 	}
 	url.Path = urlPathPrefix
 
@@ -154,16 +198,14 @@ func (f *RtmpStreamFactory) startStream(conn rtmp.ClientConn, streamName string)
 	}
 }
 
-func (f *RtmpStreamFactory) ParseURLArgument(urlArg string) (string, []*url.URL, error) {
-	var host string
+func (f *RtmpStreamFactory) ParseURLArgument(urlArg string) (string, []*RtmpEndpoint, error) {
 	var unparsedURLs []string
-	var urls []*url.URL
-
 	var regexInfo = fmt.Sprintf("Use regex that matches pattern '%v'", urlTemplateRegexString)
 
-	if urlTemplateRegex.MatchString(urlArg) { // URL is a template.
+	match := urlTemplateRegex.FindStringSubmatch(urlArg)
+	if match != nil { // URL is a template.
 		log.Infof("Processing template URL %v with regex matching. (Used regex: '%v')", urlArg, urlTemplateRegexString)
-		match := urlTemplateRegex.FindStringSubmatch(urlArg)
+
 		min, err := strconv.Atoi(match[1])
 		if err != nil {
 			return "", nil, fmt.Errorf("Failed to parse minimal value from url %v. %v: %v", urlArg, regexInfo, err)
@@ -185,6 +227,7 @@ func (f *RtmpStreamFactory) ParseURLArgument(urlArg string) (string, []*url.URL,
 		unparsedURLs = append(unparsedURLs, urlArg)
 	}
 
+	var endpoints []*RtmpEndpoint
 	var multiErr = golib.MultiError{}
 	for _, unparsedURL := range unparsedURLs {
 		parsedURL, err := url.Parse(unparsedURL)
@@ -192,16 +235,37 @@ func (f *RtmpStreamFactory) ParseURLArgument(urlArg string) (string, []*url.URL,
 			multiErr.Add(fmt.Errorf("Failed to parse URL %v: %v", unparsedURL, err))
 		} else {
 			log.Debugf("Parsed URL %v from URL template %v.", parsedURL.String(), urlArg)
-			urls = append(urls, parsedURL)
+
+			// Take the query parameter pixels=XXX and parse it to an integer, to obtain the resolution as meta information (if available).
+			// Afterwards, delete the query parameter to fix the URL.
+			pixelsStr := parsedURL.Query().Get("pixels")
+			pixels := 0
+			if pixelsStr != "" {
+				if parsedPixels, err := strconv.Atoi(pixelsStr); err != nil {
+					log.Errorf("URL %v contains 'pixels' query parameter, which could not be parsed to integer: %v", parsedURL, err)
+				} else {
+					pixels = parsedPixels
+				}
+			}
+			modifiedQuery := parsedURL.Query()
+			modifiedQuery.Del("pixels")
+			parsedURL.RawQuery = modifiedQuery.Encode()
+
+			endpoints = append(endpoints, &RtmpEndpoint{
+				url:    parsedURL,
+				pixels: uint(pixels),
+			})
 		}
 	}
+
+	var host string
 	err := multiErr.NilOrError()
-	if len(urls) > 0 {
-		host = urls[0].Host
+	if len(endpoints) > 0 {
+		host = endpoints[0].url.Host
 	} else {
 		return "", nil, fmt.Errorf("Failed to parse streaming endpoint urls from template %v: %v", urlArg, err)
 	}
-	return host, urls, err
+	return host, endpoints, err
 }
 
 func (f *RtmpStreamFactory) generateURLs(urlArg string, toReplace string, min int, max int) ([]string, error) {
@@ -221,6 +285,7 @@ func (f *RtmpStreamFactory) generateURLs(urlArg string, toReplace string, min in
 type RtmpStream struct {
 	Conn            rtmp.ClientConn
 	TimeoutDuration time.Duration
+	Endpoint        *RtmpEndpoint
 }
 
 func (f *RtmpStream) Receive() (int, error) {

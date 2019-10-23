@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -43,18 +42,15 @@ func do_main() int {
 	rand.Seed(time.Now().UTC().UnixNano())
 	factory := &RtmpStreamFactory{
 		TimeoutDuration: *timeout,
-		hostURLs:        make(map[string][]*url.URL),
 	}
 	helper := cmd.CmdDataCollector{DefaultOutput: "csv://-"}
 	helper.RegisterFlags()
 	_, args := cmd.ParseFlags()
 	if len(args) > 0 {
 		for _, urlTemplate := range args {
-			if host, urls, err := factory.ParseURLArgument(urlTemplate); err == nil {
-				if !contains(factory.hosts, host) {
-					factory.hosts = append(factory.hosts, host)
-				}
-				factory.hostURLs[host] = append(factory.hostURLs[host], urls...)
+			if host, endpoints, err := factory.ParseURLArgument(urlTemplate); err == nil {
+				host := factory.getHost(host)
+				host.addEndpoints(endpoints)
 			} else {
 				log.Errorf("Error handling streaming endpoint %v: %v", urlTemplate, err)
 			}
@@ -87,15 +83,6 @@ func do_main() int {
 	return pipe.StartAndWait()
 }
 
-func contains(s []string, e string) bool {
-	for _, a := range s {
-		if a == e {
-			return true
-		}
-	}
-	return false
-}
-
 type StreamStatisticsCollector struct {
 	bitflow.AbstractSampleSource
 
@@ -120,6 +107,7 @@ type StreamStatisticsCollector struct {
 	bytes                IncrementedCounter
 	packets              IncrementedCounter
 	packetDelay          AveragingCounter
+	pixels               TwoWayCounter
 }
 
 func (c *StreamStatisticsCollector) String() string {
@@ -184,23 +172,31 @@ func (c *StreamStatisticsCollector) sinkSamples(wg *sync.WaitGroup) {
 		bytes, bytesDiff := c.bytes.ComputeDiff(timeDiff)
 		packets, packetsDiff := c.packets.ComputeDiff(timeDiff)
 		packetDelay := c.packetDelay.ComputeAvg()
+		pixels := c.pixels.Get()
+		receivingConnections := c.receivingConnections.Get()
 		values := []bitflow.Value{
 			// Meta values
 			bitflow.Value(len(c.runningStreams)),
 			c.openConnections.Get(),
-			c.receivingConnections.Get(),
+			receivingConnections,
 			// Absolute values
 			opened, closed, errors, bytes, packets,
 			// Values per second
 			openedDiff, closedDiff, errorsDiff, bytesDiff, packetsDiff,
 			// Average values
 			packetDelay,
+			// Pixels and values per pixel
+			pixels, bytesDiff / pixels, packetsDiff / pixels,
+			// Values per running connection
+			bytesDiff / receivingConnections, packetsDiff / receivingConnections,
 		}
 		fields := []string{
 			"streams", "openConnections", "receivingConnections",
 			"opened", "closed", "errors", "bytes", "packets",
 			"opened/s", "closed/s", "errors/s", "bytes/s", "packets/s",
 			"packetDelay",
+			"pixels", "bytes/pixel", "packets/pixel",
+			"bytes/connection", "packets/connection",
 		}
 		err := c.GetSink().Sample(
 			&bitflow.Sample{
@@ -258,6 +254,7 @@ func (c *RunningStream) handleStream() {
 	// Make sure the stream is closed when we are finished
 	defer c.stream.Close()
 
+	pixels := int64(stream.Endpoint.pixels)
 	c.col.opened.Increment(1)
 	c.col.openConnections.Increment(1)
 	defer c.col.openConnections.Increment(-1)
@@ -273,6 +270,8 @@ func (c *RunningStream) handleStream() {
 				received = true
 				c.col.receivingConnections.Increment(1)
 				defer c.col.receivingConnections.Increment(-1)
+				c.col.pixels.Increment(pixels)
+				defer c.col.pixels.Increment(-pixels)
 			} else {
 				diff := now.Sub(previousPacketTime)
 				c.col.packetDelay.Add(diff.Seconds())

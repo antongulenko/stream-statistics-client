@@ -1,4 +1,4 @@
-# antongulenko/stream-statistics-client
+# teambitflow/stream-statistics-client
 FROM golang:1.12-alpine as build
 RUN apk --no-cache add git gcc g++ musl-dev
 WORKDIR /build
