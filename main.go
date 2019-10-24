@@ -37,8 +37,6 @@ func do_main() int {
 		log.Infof("No restart delay distribution defined. Using: %v", delaySampler.String())
 	}
 
-	defer golib.ProfileCpu()()
-
 	rand.Seed(time.Now().UTC().UnixNano())
 	factory := &RtmpStreamFactory{
 		TimeoutDuration: *timeout,
@@ -46,6 +44,7 @@ func do_main() int {
 	helper := cmd.CmdDataCollector{DefaultOutput: "csv://-"}
 	helper.RegisterFlags()
 	_, args := cmd.ParseFlags()
+	defer golib.ProfileCpu()()
 	if len(args) > 0 {
 		for _, urlTemplate := range args {
 			if host, endpoints, err := factory.ParseURLArgument(urlTemplate); err == nil {
@@ -74,12 +73,8 @@ func do_main() int {
 	}
 	helper.RestApis = append(helper.RestApis, &SetUrlsRestApi{Col: stats})
 
-	pipe, err := helper.BuildPipeline()
+	pipe, err := helper.BuildPipeline(stats)
 	golib.Checkerr(err)
-	pipe.Source = stats
-	for _, str := range pipe.FormatLines() {
-		log.Println(str)
-	}
 	return pipe.StartAndWait()
 }
 

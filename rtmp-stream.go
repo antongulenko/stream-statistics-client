@@ -49,6 +49,10 @@ func (h *RtmpHost) addEndpoints(endpoints []*RtmpEndpoint) {
 	h.endpoints = append(h.endpoints, endpoints...)
 }
 
+func (h *RtmpHost) String() string {
+	return fmt.Sprintf("%v (%v endpoint(s))", h.host, len(h.endpoints))
+}
+
 type RtmpStreamFactory struct {
 	hosts       []*RtmpHost
 	hostCounter int
